@@ -19,7 +19,7 @@ Uses:
 - Direct JSON schema from Pydantic
 """
 
-__version__ = "0.1.3"
+__version__ = "0.1.2"
 
 # Main API - clean and simple
 from .repair import (
