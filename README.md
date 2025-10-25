@@ -1,6 +1,6 @@
 # Fuzzy JSON Repair
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 You ask an LLM for JSON, it gives you `{"nam": "John", "emal": "john@example.com"}` instead of `{"name": "John", "email": "john@example.com"}`. Your Pydantic validation fails. You spend an hour writing error handling code.
@@ -279,7 +279,7 @@ Install with `pip install fuzzy-json-repair[fast]` for best performance.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - pydantic >= 2.0.0
 - rapidfuzz >= 3.0.0
 
