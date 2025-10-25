@@ -113,6 +113,54 @@ repaired, _, _ = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 cart = Cart.model_validate(repaired)
 ```
 
+### Drop Unrepairable Items
+
+Sometimes list items are beyond repair. Drop them automatically while respecting `minItems` constraints:
+
+```python
+class Product(BaseModel):
+    name: str
+    price: float
+
+class Cart(BaseModel):
+    items: list[Product]
+
+data = {
+    'items': [
+        {'nam': 'Laptop', 'pric': 999},        # Repairable
+        {'completely': 'wrong', 'keys': 123},  # Beyond repair
+        {'nme': 'Mouse', 'prce': 29}           # Repairable
+    ]
+}
+
+schema = Cart.model_json_schema()
+repaired, _, _ = repair_keys(
+    data, schema,
+    drop_unrepairable_items=True  # Drop items that can't be fixed
+)
+
+# Returns 2 items (dropped the broken one)
+print(len(repaired['items']))  # 2
+```
+
+Works with nested structures too:
+
+```python
+class Order(BaseModel):
+    order_id: str
+    products: list[Product]
+
+class Customer(BaseModel):
+    name: str
+    orders: list[Order]
+
+# Drops unrepairable items at any nesting level
+repaired, _, _ = repair_keys(
+    data, schema,
+    drop_unrepairable_items=True
+)
+```
+
 ### Complex Nested Structures
 
 ```python
@@ -152,7 +200,7 @@ order = fuzzy_model_validate_json(
 
 ## API Reference
 
-### `repair_keys(data, json_schema, max_error_ratio_per_key=0.3, max_total_error_ratio=0.5, strict_validation=False)`
+### `repair_keys(data, json_schema, max_error_ratio_per_key=0.3, max_total_error_ratio=0.5, strict_validation=False, drop_unrepairable_items=False)`
 
 Repair dictionary keys using fuzzy matching against a JSON schema.
 
@@ -162,6 +210,7 @@ Repair dictionary keys using fuzzy matching against a JSON schema.
 - `max_error_ratio_per_key` (float): Maximum error ratio per individual key (0.0-1.0). Default: 0.3
 - `max_total_error_ratio` (float): Maximum average error ratio across all schema fields (0.0-1.0). Default: 0.5
 - `strict_validation` (bool): If True, reject unrecognized keys. Default: False
+- `drop_unrepairable_items` (bool): If True, drop list items that can't be repaired (respects minItems). Default: False
 
 **Returns:**
 - `tuple[dict | None, float, list[RepairError]]`: (repaired_data, total_error_ratio, errors)
@@ -178,7 +227,7 @@ else:
     user = User.model_validate(repaired)
 ```
 
-### `fuzzy_model_validate_json(json_data, model_cls, repair_syntax=True, max_error_ratio_per_key=0.3, max_total_error_ratio=0.3, strict_validation=False)`
+### `fuzzy_model_validate_json(json_data, model_cls, repair_syntax=True, max_error_ratio_per_key=0.3, max_total_error_ratio=0.3, strict_validation=False, drop_unrepairable_items=False)`
 
 Repair JSON string and return validated Pydantic model instance.
 
@@ -189,6 +238,7 @@ Repair JSON string and return validated Pydantic model instance.
 - `max_error_ratio_per_key` (float): Max error per individual key. Default: 0.3
 - `max_total_error_ratio` (float): Max average error across all fields. Default: 0.3
 - `strict_validation` (bool): Reject unrecognized keys. Default: False
+- `drop_unrepairable_items` (bool): Drop list items that can't be repaired (respects minItems). Default: False
 
 **Returns:**
 - `BaseModel`: Validated Pydantic model instance
@@ -243,6 +293,23 @@ repair_keys(data, schema, max_error_ratio_per_key=0.5)
 ```python
 # Reject unrecognized keys
 repaired, _, _ = repair_keys(data, schema, strict_validation=True)
+```
+
+### Drop Unrepairable Items
+
+```python
+# Drop list items that exceed error thresholds
+repaired, _, _ = repair_keys(
+    data, schema,
+    drop_unrepairable_items=True
+)
+
+# Respects minItems constraints
+class Cart(BaseModel):
+    items: list[Product] = Field(min_length=2)
+
+# If dropping would violate minItems=2, repair fails
+repaired, _, _ = repair_keys(data, schema, drop_unrepairable_items=True)
 ```
 
 ## Performance
@@ -329,6 +396,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - Optional [json-repair](https://github.com/mangiucugna/json_repair) support
 
 ## Changelog
+
+### 0.1.1 (2025-01-25)
+
+- Added `drop_unrepairable_items` parameter for fault-tolerant list processing
+- Respects `minItems` constraints when dropping items
+- Works recursively with nested structures
 
 ### 0.1.0 (2025-01-25)
 
