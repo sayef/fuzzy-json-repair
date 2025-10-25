@@ -1,0 +1,42 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'  # Triggers on tags like v0.1.0, v1.2.3, etc.
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi  # Uses the 'pypi' environment with protection rules
+    permissions:
+      id-token: write  # Required for trusted publishing
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Verify tag format
+      run: |
+        if [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "❌ Tag must be in format v0.0.0"
+          exit 1
+        fi
+        echo "✅ Tag format valid: ${{ github.ref_name }}"
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install build tools
+      run: pip install build twine
+
+    - name: Build package
+      run: python -m build
+
+    - name: Check package
+      run: twine check dist/*
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
