@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include pyproject.toml
+include setup.py
+
+recursive-include fuzzy_json_repair *.py py.typed
+recursive-include tests *.py
+
+exclude .gitignore
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * .DS_Store
