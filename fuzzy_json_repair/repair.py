@@ -236,12 +236,33 @@ def _extract_schema_info(
     return expected_keys, required, nested_schemas, list_item_schemas
 
 
+def _check_min_items_constraint(
+    repaired_list: list[Any],
+    original_list: list[Any],
+    key: str,
+    json_schema: dict[str, Any],
+) -> bool:
+    """Check if dropping items would violate minItems constraint.
+
+    Returns True if constraint is satisfied, False if violated.
+    """
+    if len(repaired_list) >= len(original_list):
+        return True  # No items dropped
+
+    properties = json_schema.get("properties", {})
+    list_schema = properties.get(key, {})
+    min_items: int = list_schema.get("minItems", 0)
+
+    return len(repaired_list) >= min_items
+
+
 def repair_keys(
     data: dict[str, Any],
     json_schema: dict[str, Any],
     max_error_ratio_per_key: float = 0.3,
     max_total_error_ratio: float = 0.5,
     strict_validation: bool = False,
+    drop_unrepairable_items: bool = False,
 ) -> tuple[dict[str, Any] | None, float, list[RepairError]]:
     """
     Repair dictionary keys using JSON schema from Pydantic.
@@ -252,6 +273,7 @@ def repair_keys(
         max_error_ratio_per_key: Maximum error ratio per individual key (0.0-1.0)
         max_total_error_ratio: Maximum average error ratio across all schema fields (0.0-1.0)
         strict_validation: If True, reject unrecognized keys
+        drop_unrepairable_items: If True, drop list items that can't be repaired (respects minItems)
 
     Returns:
         (repaired_data, total_error_ratio, errors)
@@ -300,6 +322,7 @@ def repair_keys(
                 max_error_ratio_per_key,
                 max_total_error_ratio,
                 strict_validation,
+                drop_unrepairable_items,
             )
             # Propagate nested repair failure
             if nested_data is None:
@@ -319,15 +342,26 @@ def repair_keys(
                         max_error_ratio_per_key,
                         max_total_error_ratio,
                         strict_validation,
+                        drop_unrepairable_items,
                     )
-                    # Propagate list item repair failure
+                    # Propagate or drop item if it fails repair
                     if item_data is None:
-                        return None, total_error_ratio + item_ratio, errors + item_errors
+                        if drop_unrepairable_items:
+                            continue  # Skip this item
+                        else:
+                            return None, total_error_ratio + item_ratio, errors + item_errors
                     repaired_list.append(item_data)
                     total_error_ratio += item_ratio
                     errors.extend(item_errors)
                 else:
                     repaired_list.append(item)
+
+            # Check minItems constraint if we dropped items
+            if drop_unrepairable_items and not _check_min_items_constraint(
+                repaired_list, value, key, json_schema
+            ):
+                return None, total_error_ratio, errors
+
             repaired_data[key] = repaired_list
 
         # Primitive value
@@ -367,6 +401,7 @@ def repair_keys(
                         max_error_ratio_per_key,
                         max_total_error_ratio,
                         strict_validation,
+                        drop_unrepairable_items,
                     )
                     # Propagate nested repair failure
                     if nested_data is None:
@@ -386,15 +421,30 @@ def repair_keys(
                                 max_error_ratio_per_key,
                                 max_total_error_ratio,
                                 strict_validation,
+                                drop_unrepairable_items,
                             )
-                            # Propagate list item repair failure
+                            # Propagate or drop item if it fails repair
                             if item_data is None:
-                                return None, total_error_ratio + item_ratio, errors + item_errors
+                                if drop_unrepairable_items:
+                                    continue  # Skip this item
+                                else:
+                                    return (
+                                        None,
+                                        total_error_ratio + item_ratio,
+                                        errors + item_errors,
+                                    )
                             repaired_list.append(item_data)
                             total_error_ratio += item_ratio
                             errors.extend(item_errors)
                         else:
                             repaired_list.append(item)
+
+                    # Check minItems constraint if we dropped items
+                    if drop_unrepairable_items and not _check_min_items_constraint(
+                        repaired_list, value, matched_key, json_schema
+                    ):
+                        return None, total_error_ratio, errors
+
                     repaired_data[matched_key] = repaired_list
 
                 # Primitive value
@@ -473,6 +523,7 @@ def fuzzy_model_validate_json(
     max_error_ratio_per_key: float = 0.3,
     max_total_error_ratio: float = 0.3,
     strict_validation: bool = False,
+    drop_unrepairable_items: bool = False,
 ) -> Any:
     """
     Repair LLM response JSON data to match a Pydantic model schema.
@@ -491,6 +542,7 @@ def fuzzy_model_validate_json(
         max_error_ratio_per_key: Maximum allowed error ratio per individual key (0.0-1.0)
         max_total_error_ratio: Maximum average error ratio across all fields (0.0-1.0)
         strict_validation: If True, fail on any unrecognized keys
+        drop_unrepairable_items: If True, drop list items that can't be repaired (respects minItems)
 
     Returns:
         Validated Pydantic BaseModel instance
@@ -542,7 +594,12 @@ def fuzzy_model_validate_json(
     # Get schema and repair keys
     schema = model_cls.model_json_schema()
     repaired_data, total_error_ratio, errors = repair_keys(
-        parsed_data, schema, max_error_ratio_per_key, max_total_error_ratio, strict_validation
+        parsed_data,
+        schema,
+        max_error_ratio_per_key,
+        max_total_error_ratio,
+        strict_validation,
+        drop_unrepairable_items,
     )
 
     # Check if repair succeeded
