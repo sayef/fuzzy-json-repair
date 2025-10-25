@@ -57,27 +57,43 @@ class RepairError:
 
 @dataclass
 class RepairResult:
-    """Result of repair operation."""
+    """Result of a repair operation.
+
+    Attributes:
+        success: Whether the repair succeeded within acceptable thresholds
+        data: Repaired data (None if repair failed)
+        error_ratio: Total error ratio across all repairs
+        errors: List of all errors encountered during repair
+    """
 
     success: bool
-    repaired_data: dict[str, Any] | None = None
+    data: dict[str, Any] | None
+    error_ratio: float
     errors: list[RepairError] = field(default_factory=list)
-    total_error_ratio: float = 0.0
+
+    @property
+    def failed(self) -> bool:
+        """True if repair failed."""
+        return not self.success
 
     @property
     def has_errors(self) -> bool:
+        """True if any errors were encountered."""
         return len(self.errors) > 0
 
     @property
     def misspelled_keys(self) -> list[RepairError]:
+        """List of misspelled key errors."""
         return [e for e in self.errors if e.error_type == ErrorType.misspelled_key]
 
     @property
     def missing_keys(self) -> list[RepairError]:
+        """List of missing key errors."""
         return [e for e in self.errors if e.error_type == ErrorType.missing_expected_key]
 
     @property
     def unrecognized_keys(self) -> list[RepairError]:
+        """List of unrecognized key errors."""
         return [e for e in self.errors if e.error_type == ErrorType.unrecognized_key]
 
 
@@ -263,7 +279,7 @@ def repair_keys(
     max_total_error_ratio: float = 0.5,
     strict_validation: bool = False,
     drop_unrepairable_items: bool = False,
-) -> tuple[dict[str, Any] | None, float, list[RepairError]]:
+) -> RepairResult:
     """
     Repair dictionary keys using JSON schema from Pydantic.
 
@@ -276,9 +292,7 @@ def repair_keys(
         drop_unrepairable_items: If True, drop list items that can't be repaired (respects minItems)
 
     Returns:
-        (repaired_data, total_error_ratio, errors)
-        - repaired_data is None if repair exceeds acceptable thresholds
-        - total_error_ratio and errors are always returned for diagnostics
+        RepairResult with success flag, repaired data, error ratio, and error details
 
     Example:
         from pydantic import BaseModel
@@ -290,11 +304,11 @@ def repair_keys(
         schema = User.model_json_schema()
         data = {'nam': 'John', 'agge': 30}
 
-        repaired, ratio, errors = repair_keys(data, schema)
-        if repaired is None:
-            print("Repair failed - too many errors")
+        result = repair_keys(data, schema)
+        if result.success:
+            user = User.model_validate(result.data)
         else:
-            user = User.model_validate(repaired)
+            print(f"Repair failed: {len(result.errors)} errors")
     """
     repaired_data: dict[str, Any] = {}
     total_error_ratio: float = 0.0
@@ -316,7 +330,7 @@ def repair_keys(
 
         # Handle nested objects
         if key in nested_schemas and isinstance(value, dict):
-            nested_data, nested_ratio, nested_errors = repair_keys(
+            nested_result = repair_keys(
                 value,
                 nested_schemas[key],
                 max_error_ratio_per_key,
@@ -325,18 +339,23 @@ def repair_keys(
                 drop_unrepairable_items,
             )
             # Propagate nested repair failure
-            if nested_data is None:
-                return None, total_error_ratio + nested_ratio, errors + nested_errors
-            repaired_data[key] = nested_data
-            total_error_ratio += nested_ratio
-            errors.extend(nested_errors)
+            if not nested_result.success:
+                return RepairResult(
+                    success=False,
+                    data=None,
+                    error_ratio=total_error_ratio + nested_result.error_ratio,
+                    errors=errors + nested_result.errors,
+                )
+            repaired_data[key] = nested_result.data
+            total_error_ratio += nested_result.error_ratio
+            errors.extend(nested_result.errors)
 
         # Handle lists of objects
         elif key in list_item_schemas and isinstance(value, list):
             repaired_list = []
             for item in value:
                 if isinstance(item, dict):
-                    item_data, item_ratio, item_errors = repair_keys(
+                    item_result = repair_keys(
                         item,
                         list_item_schemas[key],
                         max_error_ratio_per_key,
@@ -345,14 +364,19 @@ def repair_keys(
                         drop_unrepairable_items,
                     )
                     # Propagate or drop item if it fails repair
-                    if item_data is None:
+                    if not item_result.success:
                         if drop_unrepairable_items:
                             continue  # Skip this item
                         else:
-                            return None, total_error_ratio + item_ratio, errors + item_errors
-                    repaired_list.append(item_data)
-                    total_error_ratio += item_ratio
-                    errors.extend(item_errors)
+                            return RepairResult(
+                                success=False,
+                                data=None,
+                                error_ratio=total_error_ratio + item_result.error_ratio,
+                                errors=errors + item_result.errors,
+                            )
+                    repaired_list.append(item_result.data)
+                    total_error_ratio += item_result.error_ratio
+                    errors.extend(item_result.errors)
                 else:
                     repaired_list.append(item)
 
@@ -360,7 +384,9 @@ def repair_keys(
             if drop_unrepairable_items and not _check_min_items_constraint(
                 repaired_list, value, key, json_schema
             ):
-                return None, total_error_ratio, errors
+                return RepairResult(
+                    success=False, data=None, error_ratio=total_error_ratio, errors=errors
+                )
 
             repaired_data[key] = repaired_list
 
@@ -395,7 +421,7 @@ def repair_keys(
 
                 # Handle nested objects for repaired keys
                 if matched_key in nested_schemas and isinstance(value, dict):
-                    nested_data, nested_ratio, nested_errors = repair_keys(
+                    nested_result = repair_keys(
                         value,
                         nested_schemas[matched_key],
                         max_error_ratio_per_key,
@@ -404,18 +430,23 @@ def repair_keys(
                         drop_unrepairable_items,
                     )
                     # Propagate nested repair failure
-                    if nested_data is None:
-                        return None, total_error_ratio + nested_ratio, errors + nested_errors
-                    repaired_data[matched_key] = nested_data
-                    total_error_ratio += nested_ratio
-                    errors.extend(nested_errors)
+                    if not nested_result.success:
+                        return RepairResult(
+                            success=False,
+                            data=None,
+                            error_ratio=total_error_ratio + nested_result.error_ratio,
+                            errors=errors + nested_result.errors,
+                        )
+                    repaired_data[matched_key] = nested_result.data
+                    total_error_ratio += nested_result.error_ratio
+                    errors.extend(nested_result.errors)
 
                 # Handle lists of objects for repaired keys
                 elif matched_key in list_item_schemas and isinstance(value, list):
                     repaired_list = []
                     for item in value:
                         if isinstance(item, dict):
-                            item_data, item_ratio, item_errors = repair_keys(
+                            item_result = repair_keys(
                                 item,
                                 list_item_schemas[matched_key],
                                 max_error_ratio_per_key,
@@ -424,18 +455,19 @@ def repair_keys(
                                 drop_unrepairable_items,
                             )
                             # Propagate or drop item if it fails repair
-                            if item_data is None:
+                            if not item_result.success:
                                 if drop_unrepairable_items:
                                     continue  # Skip this item
                                 else:
-                                    return (
-                                        None,
-                                        total_error_ratio + item_ratio,
-                                        errors + item_errors,
+                                    return RepairResult(
+                                        success=False,
+                                        data=None,
+                                        error_ratio=total_error_ratio + item_result.error_ratio,
+                                        errors=errors + item_result.errors,
                                     )
-                            repaired_list.append(item_data)
-                            total_error_ratio += item_ratio
-                            errors.extend(item_errors)
+                            repaired_list.append(item_result.data)
+                            total_error_ratio += item_result.error_ratio
+                            errors.extend(item_result.errors)
                         else:
                             repaired_list.append(item)
 
@@ -443,7 +475,9 @@ def repair_keys(
                     if drop_unrepairable_items and not _check_min_items_constraint(
                         repaired_list, value, matched_key, json_schema
                     ):
-                        return None, total_error_ratio, errors
+                        return RepairResult(
+                            success=False, data=None, error_ratio=total_error_ratio, errors=errors
+                        )
 
                     repaired_data[matched_key] = repaired_list
 
@@ -489,17 +523,23 @@ def repair_keys(
             max_individual_error = max(e.error_ratio for e in misspelled)
             # Reject if any single repair has very high error
             if max_individual_error > min(0.5, max_error_ratio_per_key * 1.5):
-                return None, total_error_ratio, errors
+                return RepairResult(
+                    success=False, data=None, error_ratio=total_error_ratio, errors=errors
+                )
 
         # Reject if average error is too high
         if avg_error_ratio > max_total_error_ratio:
-            return None, total_error_ratio, errors
+            return RepairResult(
+                success=False, data=None, error_ratio=total_error_ratio, errors=errors
+            )
 
     # In strict mode, reject unrecognized keys
     if strict_validation:
         has_unrecognized = any(e.error_type == ErrorType.unrecognized_key for e in errors)
         if has_unrecognized:
-            return None, total_error_ratio, errors
+            return RepairResult(
+                success=False, data=None, error_ratio=total_error_ratio, errors=errors
+            )
 
     # Check for fundamental mismatch: many errors, no successful repairs
     missing_required_errors = [e for e in errors if e.error_type == ErrorType.missing_expected_key]
@@ -511,9 +551,11 @@ def repair_keys(
         and len(successful_repairs) == 0
         and len(missing_required_errors) > 3
     ):
-        return None, total_error_ratio, errors
+        return RepairResult(success=False, data=None, error_ratio=total_error_ratio, errors=errors)
 
-    return repaired_data, total_error_ratio, errors
+    return RepairResult(
+        success=True, data=repaired_data, error_ratio=total_error_ratio, errors=errors
+    )
 
 
 def fuzzy_model_validate_json(
@@ -593,7 +635,7 @@ def fuzzy_model_validate_json(
 
     # Get schema and repair keys
     schema = model_cls.model_json_schema()
-    repaired_data, total_error_ratio, errors = repair_keys(
+    result = repair_keys(
         parsed_data,
         schema,
         max_error_ratio_per_key,
@@ -603,10 +645,10 @@ def fuzzy_model_validate_json(
     )
 
     # Check if repair succeeded
-    if repaired_data is not None:
+    if result.success:
         try:
             # Validate the repaired data
-            return model_cls.model_validate(repaired_data)
+            return model_cls.model_validate(result.data)
         except Exception as validation_error:
             # Repair succeeded but validation failed
             raise ValueError(
@@ -616,19 +658,15 @@ def fuzzy_model_validate_json(
 
     # Repair failed - create detailed error message
     error_summary = []
-    misspelled_keys = [e for e in errors if e.error_type == ErrorType.misspelled_key]
-    missing_keys = [e for e in errors if e.error_type == ErrorType.missing_expected_key]
-    unrecognized_keys = [e for e in errors if e.error_type == ErrorType.unrecognized_key]
-
-    if misspelled_keys:
-        error_summary.append(f"{len(misspelled_keys)} misspelled keys")
-    if missing_keys:
-        error_summary.append(f"{len(missing_keys)} missing keys")
-    if unrecognized_keys:
-        error_summary.append(f"{len(unrecognized_keys)} unrecognized keys")
+    if result.misspelled_keys:
+        error_summary.append(f"{len(result.misspelled_keys)} misspelled keys")
+    if result.missing_keys:
+        error_summary.append(f"{len(result.missing_keys)} missing keys")
+    if result.unrecognized_keys:
+        error_summary.append(f"{len(result.unrecognized_keys)} unrecognized keys")
 
     raise ValueError(
         f"JSON repair failed for {model_cls.__name__}. "
         f"Issues found: {', '.join(error_summary)}. "
-        f"Details: {[str(e) for e in errors[:5]]}"  # Show first 5 errors
+        f"Details: {[str(e) for e in result.errors[:5]]}"  # Show first 5 errors
     )

@@ -66,14 +66,14 @@ class TestRepairKeys(unittest.TestCase):
         schema = User.model_json_schema()
         data = {"nam": "John", "agge": 30, "emal": "john@example.com"}
 
-        repaired, ratio, errors = repair_keys(data, schema, max_error_ratio_per_key=0.5)
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
-        self.assertIsNotNone(repaired)
-        self.assertEqual(repaired["name"], "John")
-        self.assertEqual(repaired["age"], 30)
-        self.assertEqual(repaired["email"], "john@example.com")
-        self.assertEqual(len(errors), 3)
-        self.assertGreater(ratio, 0)
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["name"], "John")
+        self.assertEqual(result.data["age"], 30)
+        self.assertEqual(result.data["email"], "john@example.com")
+        self.assertEqual(len(result.errors), 3)
+        self.assertGreater(result.error_ratio, 0)
 
     def test_nested_objects(self):
         """Test nested object repair."""
@@ -88,14 +88,14 @@ class TestRepairKeys(unittest.TestCase):
             "addres": {"stret": "123 Main", "cty": "NYC", "stat": "NY", "zip_cod": "10001"},
         }
 
-        repaired, ratio, errors = repair_keys(data, schema, max_error_ratio_per_key=0.5)
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
-        self.assertIsNotNone(repaired)
-        self.assertEqual(repaired["name"], "John")
-        self.assertEqual(repaired["address"]["street"], "123 Main")
-        self.assertEqual(repaired["address"]["city"], "NYC")
-        self.assertEqual(repaired["address"]["state"], "NY")
-        self.assertEqual(repaired["address"]["zip_code"], "10001")
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["name"], "John")
+        self.assertEqual(result.data["address"]["street"], "123 Main")
+        self.assertEqual(result.data["address"]["city"], "NYC")
+        self.assertEqual(result.data["address"]["state"], "NY")
+        self.assertEqual(result.data["address"]["zip_code"], "10001")
 
     def test_list_of_objects(self):
         """Test lists of objects."""
@@ -119,13 +119,13 @@ class TestRepairKeys(unittest.TestCase):
             ],
         }
 
-        repaired, ratio, errors = repair_keys(data, schema, max_error_ratio_per_key=0.5)
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
-        self.assertIsNotNone(repaired)
-        self.assertEqual(repaired["cart_id"], "C123")
-        self.assertEqual(len(repaired["products"]), 2)
-        self.assertEqual(repaired["products"][0]["name"], "Laptop")
-        self.assertEqual(repaired["products"][1]["name"], "Mouse")
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["cart_id"], "C123")
+        self.assertEqual(len(result.data["products"]), 2)
+        self.assertEqual(result.data["products"][0]["name"], "Laptop")
+        self.assertEqual(result.data["products"][1]["name"], "Mouse")
 
     def test_complex_nested_structure(self):
         """Test very complex nested structure with multiple levels."""
@@ -166,34 +166,34 @@ class TestRepairKeys(unittest.TestCase):
             "total_amnt": 1359.97,
         }
 
-        repaired, ratio, errors = repair_keys(data, schema, max_error_ratio_per_key=0.5)
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
-        self.assertIsNotNone(repaired)
+        self.assertTrue(result.success)
         # Verify root level
-        self.assertEqual(repaired["order_id"], "ORD-12345")
-        self.assertEqual(repaired["total_amount"], 1359.97)
+        self.assertEqual(result.data["order_id"], "ORD-12345")
+        self.assertEqual(result.data["total_amount"], 1359.97)
 
         # Verify nested customer
-        self.assertEqual(repaired["customer"]["customer_id"], "C-001")
-        self.assertEqual(repaired["customer"]["first_name"], "John")
-        self.assertEqual(repaired["customer"]["last_name"], "Doe")
-        self.assertEqual(repaired["customer"]["age"], 35)
+        self.assertEqual(result.data["customer"]["customer_id"], "C-001")
+        self.assertEqual(result.data["customer"]["first_name"], "John")
+        self.assertEqual(result.data["customer"]["last_name"], "Doe")
+        self.assertEqual(result.data["customer"]["age"], 35)
 
         # Verify double-nested contact
-        self.assertEqual(repaired["customer"]["contact"]["email"], "john.doe@email.com")
-        self.assertEqual(repaired["customer"]["contact"]["phone"], "+1-555-0100")
+        self.assertEqual(result.data["customer"]["contact"]["email"], "john.doe@email.com")
+        self.assertEqual(result.data["customer"]["contact"]["phone"], "+1-555-0100")
 
         # Verify list of products
-        self.assertEqual(len(repaired["products"]), 2)
-        self.assertEqual(repaired["products"][0]["product_id"], "P-001")
-        self.assertEqual(repaired["products"][0]["name"], "Laptop")
+        self.assertEqual(len(result.data["products"]), 2)
+        self.assertEqual(result.data["products"][0]["product_id"], "P-001")
+        self.assertEqual(result.data["products"][0]["name"], "Laptop")
 
         # Verify shipping address
-        self.assertEqual(repaired["shipping_address"]["street"], "123 Main Street")
-        self.assertEqual(repaired["shipping_address"]["city"], "New York")
+        self.assertEqual(result.data["shipping_address"]["street"], "123 Main Street")
+        self.assertEqual(result.data["shipping_address"]["city"], "New York")
 
-        print(f"\n✅ Complex nested: {len(errors)} typos repaired")
-        print(f"   Total error ratio: {ratio:.2%}")
+        print(f"\n✅ Complex nested: {len(result.errors)} typos repaired")
+        print(f"   Total error result.error_ratio: {result.error_ratio:.2%}")
 
     def test_error_types(self):
         """Test different error types."""
@@ -209,9 +209,9 @@ class TestRepairKeys(unittest.TestCase):
             # 'age' is missing
         }
 
-        repaired, ratio, errors = repair_keys(data, schema, max_error_ratio_per_key=0.5)
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
-        error_types = {e.error_type for e in errors}
+        error_types = {e.error_type for e in result.errors}
         self.assertIn(ErrorType.misspelled_key, error_types)
         self.assertIn(ErrorType.unrecognized_key, error_types)
         self.assertIn(ErrorType.missing_expected_key, error_types)
@@ -303,7 +303,7 @@ class TestFuzzyModelValidateJson(unittest.TestCase):
         print("\n✅ Complex validation successful!")
 
     def test_validation_failure(self):
-        """Test that validation fails for too many errors."""
+        """Test that validation fails for too many result.errors."""
 
         class User(BaseModel):
             name: str
@@ -333,13 +333,11 @@ class TestRepairThresholds(unittest.TestCase):
         schema = User.model_json_schema()
         data = {"nam": "John", "agge": 30, "emal": "john@example.com"}
 
-        repaired, ratio, errors = repair_keys(
-            data, schema, max_error_ratio_per_key=0.5, max_total_error_ratio=0.3
-        )
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5, max_total_error_ratio=0.3)
 
         # Should succeed with good typos
-        self.assertIsNotNone(repaired)
-        self.assertEqual(len(errors), 3)
+        self.assertTrue(result.success)
+        self.assertEqual(len(result.errors), 3)
 
     def test_excessive_total_error_ratio(self):
         """Test that repairs with high average error return None."""
@@ -353,13 +351,11 @@ class TestRepairThresholds(unittest.TestCase):
         # Multiple typos that sum to high total error
         data = {"nme": "John", "ag": 30, "eml": "john@example.com"}
 
-        repaired, ratio, errors = repair_keys(
-            data, schema, max_error_ratio_per_key=0.5, max_total_error_ratio=0.1
-        )
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5, max_total_error_ratio=0.1)
 
-        # Should fail due to high total error ratio (3 typos / 3 fields > 0.1)
-        self.assertIsNone(repaired)
-        self.assertGreater(ratio, 0)
+        # Should fail due to high total error result.error_ratio (3 typos / 3 fields > 0.1)
+        self.assertFalse(result.success)
+        self.assertGreater(result.error_ratio, 0)
 
     def test_strict_mode_rejects_unrecognized(self):
         """Test strict mode returns None for unrecognized keys."""
@@ -371,13 +367,11 @@ class TestRepairThresholds(unittest.TestCase):
         schema = User.model_json_schema()
         data = {"name": "John", "age": 30, "unknown_field": "value"}
 
-        repaired, ratio, errors = repair_keys(
-            data, schema, max_error_ratio_per_key=0.5, strict_validation=True
-        )
+        result = repair_keys(data, schema, max_error_ratio_per_key=0.5, strict_validation=True)
 
         # Should fail in strict mode with unrecognized keys
-        self.assertIsNone(repaired)
-        has_unrecognized = any(e.error_type == ErrorType.unrecognized_key for e in errors)
+        self.assertFalse(result.success)
+        has_unrecognized = any(e.error_type == ErrorType.unrecognized_key for e in result.errors)
         self.assertTrue(has_unrecognized)
 
 

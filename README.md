@@ -48,12 +48,13 @@ from fuzzy_json_repair import repair_keys
 schema = User.model_json_schema()
 data = {'nam': 'John', 'agge': 30, 'emal': 'john@example.com'}
 
-repaired, error_ratio, errors = repair_keys(data, schema)
+result = repair_keys(data, schema)
 
-if repaired is None:
-    print(f"Too many errors: {errors}")
+if result.success:
+    user = User.model_validate(result.data)
 else:
-    user = User.model_validate(repaired)
+    print(f"Repair failed: {len(result.errors)} errors")
+    print(f"Error ratio: {result.error_ratio:.2%}")
 ```
 
 ## Advanced Usage
@@ -80,10 +81,11 @@ data = {
 }
 
 schema = Person.model_json_schema()
-repaired, _, _ = repair_keys(data, schema, max_error_ratio_per_key=0.5)
+result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
 # All nested typos are fixed!
-person = Person.model_validate(repaired)
+if result.success:
+    person = Person.model_validate(result.data)
 ```
 
 ### Lists of Objects
@@ -107,10 +109,11 @@ data = {
 }
 
 schema = Cart.model_json_schema()
-repaired, _, _ = repair_keys(data, schema, max_error_ratio_per_key=0.5)
+result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
 # Repairs all typos in the list items too!
-cart = Cart.model_validate(repaired)
+if result.success:
+    cart = Cart.model_validate(result.data)
 ```
 
 ### Drop Unrepairable Items
@@ -134,13 +137,14 @@ data = {
 }
 
 schema = Cart.model_json_schema()
-repaired, _, _ = repair_keys(
+result = repair_keys(
     data, schema,
     drop_unrepairable_items=True  # Drop items that can't be fixed
 )
 
-# Returns 2 items (dropped the broken one)
-print(len(repaired['items']))  # 2
+if result.success:
+    # Returns 2 items (dropped the broken one)
+    print(len(result.data['items']))  # 2
 ```
 
 Works with nested structures too:
@@ -155,10 +159,12 @@ class Customer(BaseModel):
     orders: list[Order]
 
 # Drops unrepairable items at any nesting level
-repaired, _, _ = repair_keys(
+result = repair_keys(
     data, schema,
     drop_unrepairable_items=True
 )
+if result.success:
+    use(result.data)
 ```
 
 ### Complex Nested Structures
@@ -213,18 +219,20 @@ Repair dictionary keys using fuzzy matching against a JSON schema.
 - `drop_unrepairable_items` (bool): If True, drop list items that can't be repaired (respects minItems). Default: False
 
 **Returns:**
-- `tuple[dict | None, float, list[RepairError]]`: (repaired_data, total_error_ratio, errors)
-  - `repaired_data` is `None` if repair exceeds acceptable thresholds
-  - `total_error_ratio` and `errors` are always returned for diagnostics
+- `RepairResult`: Object with:
+  - `success` (bool): Whether repair succeeded
+  - `data` (dict | None): Repaired data (None if failed)
+  - `error_ratio` (float): Total error ratio
+  - `errors` (list[RepairError]): List of errors encountered
 
 **Example:**
 ```python
 schema = User.model_json_schema()
-repaired, ratio, errors = repair_keys(data, schema)
-if repaired is None:
-    print("Repair failed - too many errors")
+result = repair_keys(data, schema)
+if result.success:
+    user = User.model_validate(result.data)
 else:
-    user = User.model_validate(repaired)
+    print(f"Repair failed: {len(result.errors)} errors")
 ```
 
 ### `fuzzy_model_validate_json(json_data, model_cls, repair_syntax=True, max_error_ratio_per_key=0.3, max_total_error_ratio=0.3, strict_validation=False, drop_unrepairable_items=False)`
@@ -254,7 +262,7 @@ user = fuzzy_model_validate_json(json_str, User)
 ## Error Types
 
 ```python
-from fuzzy_json_repair import ErrorType, RepairError
+from fuzzy_json_repair import ErrorType, RepairError, RepairResult
 
 # ErrorType enum:
 ErrorType.misspelled_key       # Typo was fixed
@@ -267,10 +275,20 @@ error = RepairError(
     from_key='nam',
     to_key='name',
     error_ratio=0.143,
-    message=None
 )
 print(error)
 # "Misspelled key 'nam' → 'name' (error: 14.3%)"
+
+# RepairResult dataclass:
+result = RepairResult(
+    success=True,
+    data={'name': 'John', 'age': 30},
+    error_ratio=0.15,
+    errors=[error]
+)
+print(f"Success: {result.success}")
+print(f"Misspelled: {len(result.misspelled_keys)}")
+print(f"Failed: {result.failed}")
 ```
 
 ## Configuration
@@ -292,24 +310,30 @@ repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
 ```python
 # Reject unrecognized keys
-repaired, _, _ = repair_keys(data, schema, strict_validation=True)
+result = repair_keys(data, schema, strict_validation=True)
+if result.success:
+    use(result.data)
 ```
 
 ### Drop Unrepairable Items
 
 ```python
 # Drop list items that exceed error thresholds
-repaired, _, _ = repair_keys(
+result = repair_keys(
     data, schema,
     drop_unrepairable_items=True
 )
 
 # Respects minItems constraints
+from pydantic import Field
+
 class Cart(BaseModel):
     items: list[Product] = Field(min_length=2)
 
 # If dropping would violate minItems=2, repair fails
-repaired, _, _ = repair_keys(data, schema, drop_unrepairable_items=True)
+result = repair_keys(data, schema, drop_unrepairable_items=True)
+if not result.success:
+    print("Would violate minItems constraint")
 ```
 
 ## Performance
@@ -394,20 +418,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - Uses [RapidFuzz](https://github.com/maxbachmann/RapidFuzz) for fast fuzzy matching
 - Built for [Pydantic](https://github.com/pydantic/pydantic) integration
 - Optional [json-repair](https://github.com/mangiucugna/json_repair) support
-
-## Changelog
-
-### 0.1.1 (2025-01-25)
-
-- Added `drop_unrepairable_items` parameter for fault-tolerant list processing
-- Respects `minItems` constraints when dropping items
-- Works recursively with nested structures
-
-### 0.1.0 (2025-01-25)
-
-- Initial release
-- Core fuzzy matching with RapidFuzz
-- Pydantic integration
-- Nested object and list support
-- Batch processing with cdist
-- Comprehensive test suite

@@ -6,7 +6,9 @@ Simple API:
 
     # Low-level: Repair dict keys using JSON schema
     schema = MyModel.model_json_schema()
-    repaired, ratio, errors = repair_keys(data, schema)
+    result = repair_keys(data, schema)
+    if result.success:
+        use(result.data)
 
     # High-level: Repair JSON string and return validated Pydantic model
     user = fuzzy_model_validate_json(json_str, User)
@@ -17,7 +19,7 @@ Uses:
 - Direct JSON schema from Pydantic
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 # Main API - clean and simple
 from .repair import (
