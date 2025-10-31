@@ -19,22 +19,27 @@ Uses:
 - Direct JSON schema from Pydantic
 """
 
+from typing import Any
+
 __version__ = "0.1.4"
 
 # Main API - clean and simple
-from .repair import (
-    ErrorType,
-    RepairError,
-    RepairResult,
-    fuzzy_model_validate_json,
-    repair_keys,
-)
+from .repair import ErrorType, RepairError, RepairFailedError, RepairResult, repair_keys
 
 __all__ = [
     "repair_keys",
     "fuzzy_model_validate_json",
     "RepairError",
     "RepairResult",
+    "RepairFailedError",
     "ErrorType",
     "__version__",
 ]
+
+
+def __getattr__(name: str) -> Any:  # pragma: no cover - thin wrapper
+    if name == "fuzzy_model_validate_json":
+        from .repair import fuzzy_model_validate_json
+
+        return fuzzy_model_validate_json
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

@@ -27,15 +27,15 @@ keywords = ["json", "repair", "fuzzy", "matching", "typo", "pydantic", "validati
 
 dependencies = [
     "rapidfuzz>=3.0.0",
-    "pydantic>=2.0.0",
+    "json-repair>=0.7.0",
 ]
 
 [project.optional-dependencies]
 fast = [
     "numpy>=1.20.0",  # For cdist batch processing
 ]
-syntax = [
-    "json-repair>=0.7.0",  # For JSON syntax repair
+pydantic = [
+    "pydantic>=2.0.0",
 ]
 dev = [
     "pytest>=7.0.0",

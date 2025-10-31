@@ -13,10 +13,21 @@ This library fixes those typos automatically using fuzzy string matching. No mor
 pip install fuzzy-json-repair
 ```
 
-If you're processing lots of data, install with numpy for ~10x faster batch processing:
+This includes JSON syntax repair automatically. For additional features:
 
+**With Pydantic** (for `fuzzy_model_validate_json`):
+```bash
+pip install fuzzy-json-repair[pydantic]
+```
+
+**With NumPy** (~10x faster batch processing):
 ```bash
 pip install fuzzy-json-repair[fast]
+```
+
+**All extras:**
+```bash
+pip install fuzzy-json-repair[pydantic,fast]
 ```
 
 ## Usage
@@ -118,7 +129,7 @@ if result.success:
 
 ### Drop Unrepairable Items
 
-Sometimes list items are beyond repair. Drop them automatically while respecting `minItems` constraints:
+Drop list items, unrecognized keys, and optional nested objects that are beyond repair. Automatically respects `minItems` constraints and preserves required fields:
 
 ```python
 class Product(BaseModel):
@@ -216,7 +227,7 @@ Repair dictionary keys using fuzzy matching against a JSON schema.
 - `max_error_ratio_per_key` (float): Maximum error ratio per individual key (0.0-1.0). Default: 0.3
 - `max_total_error_ratio` (float): Maximum average error ratio across all schema fields (0.0-1.0). Default: 0.5
 - `strict_validation` (bool): If True, reject unrecognized keys. Default: False
-- `drop_unrepairable_items` (bool): If True, drop list items that can't be repaired (respects minItems). Default: False
+- `drop_unrepairable_items` (bool): If True, drop list items, unrecognized keys, and optional nested objects that can't be repaired (respects minItems, preserves required fields). Default: False
 
 **Returns:**
 - `RepairResult`: Object with:
@@ -235,28 +246,36 @@ else:
     print(f"Repair failed: {len(result.errors)} errors")
 ```
 
-### `fuzzy_model_validate_json(json_data, model_cls, repair_syntax=True, max_error_ratio_per_key=0.3, max_total_error_ratio=0.3, strict_validation=False, drop_unrepairable_items=False)`
+### `fuzzy_model_validate_json(json_data, model_cls, max_error_ratio_per_key=0.3, max_total_error_ratio=0.3, strict_validation=False, drop_unrepairable_items=False)`
 
-Repair JSON string and return validated Pydantic model instance.
+Repair JSON string and return validated Pydantic model instance. Automatically attempts JSON syntax repair when json-repair is available.
 
 **Parameters:**
 - `json_data` (str): JSON string to repair
 - `model_cls` (type[BaseModel]): Pydantic model class
-- `repair_syntax` (bool): Attempt to fix JSON syntax errors. Default: True (requires json-repair)
 - `max_error_ratio_per_key` (float): Max error per individual key. Default: 0.3
 - `max_total_error_ratio` (float): Max average error across all fields. Default: 0.3
 - `strict_validation` (bool): Reject unrecognized keys. Default: False
-- `drop_unrepairable_items` (bool): Drop list items that can't be repaired (respects minItems). Default: False
+- `drop_unrepairable_items` (bool): Drop list items, unrecognized keys, and optional nested objects that can't be repaired (respects minItems, preserves required fields). Default: False
 
 **Returns:**
 - `BaseModel`: Validated Pydantic model instance
 
 **Raises:**
-- `ValueError`: If repair fails or validation fails
+- `RepairFailedError`: If repair fails or validation fails (provides structured access to repair details)
 
 **Example:**
 ```python
-user = fuzzy_model_validate_json(json_str, User)
+from fuzzy_json_repair import fuzzy_model_validate_json, RepairFailedError
+
+try:
+    user = fuzzy_model_validate_json(json_str, User)
+except RepairFailedError as e:
+    print(f"Repair failed: {e}")
+    print(f"Errors: {len(e.errors)}")
+    print(f"Unrepaired errors: {len(e.unrepaired_errors)}")
+    for error in e.errors:
+        print(f"  [{error.path or 'root'}] {error}")
 ```
 
 ## Error Types
@@ -338,18 +357,19 @@ if not result.success:
 
 ## Performance
 
-The library uses two matching strategies:
+The library uses multiple optimization strategies:
 
-- **With numpy**: Uses `process.cdist()` for batch processing (10-20x faster)
-- **Without numpy**: Uses `process.extractOne()` loop (still fast)
+- **JSON Parsing**: Uses Pydantic's Rust-powered parser (TypeAdapter) when available (~22% faster than json.loads)
+- **Fuzzy Matching with numpy**: Uses `process.cdist()` for batch processing (10-20x faster)
+- **Fuzzy Matching without numpy**: Uses `process.extractOne()` loop (still fast)
 
-Both use `fuzz.ratio` from RapidFuzz - no raw Levenshtein distance anywhere.
+Both fuzzy matching strategies use `fuzz.ratio` from RapidFuzz - no raw Levenshtein distance anywhere.
 
 **Benchmark (1000 repairs):**
 - With numpy: ~0.05s
 - Without numpy: ~0.5s
 
-Install with `pip install fuzzy-json-repair[fast]` for best performance.
+Install with `pip install fuzzy-json-repair[pydantic,fast]` for best performance.
 
 ## How It Works
 
@@ -371,12 +391,12 @@ Install with `pip install fuzzy-json-repair[fast]` for best performance.
 ## Requirements
 
 - Python 3.11+
-- pydantic >= 2.0.0
 - rapidfuzz >= 3.0.0
+- json-repair >= 0.7.0
 
 **Optional:**
-- numpy >= 1.20.0 (for faster batch processing)
-- json-repair >= 0.7.0 (for JSON syntax repair)
+- pydantic >= 2.0.0 (for fuzzy_model_validate_json, install with [pydantic])
+- numpy >= 1.20.0 (for faster batch processing, install with [fast])
 
 ## Development
 
@@ -386,7 +406,7 @@ git clone https://github.com/sayef/fuzzy-json-repair.git
 cd fuzzy-json-repair
 
 # Install with dev dependencies
-pip install -e ".[dev,fast,syntax]"
+pip install -e ".[dev,pydantic,fast]"
 
 # Run tests
 pytest

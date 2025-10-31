@@ -13,7 +13,7 @@ help:
 	@echo "  make release-major  - Bump major version (0.1.0 → 1.0.0) and push tag"
 
 install:
-	pip install -e ".[dev,fast,syntax]"
+	pip install -e ".[dev,fast,pydantic]"
 
 test:
 	pytest tests/ -v --cov=fuzzy_json_repair --cov-report=term-missing

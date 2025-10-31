@@ -2,8 +2,11 @@
 Comprehensive tests for fuzzy-json-repair.
 """
 
+import importlib
 import json
+import sys
 import unittest
+from unittest import mock
 
 from pydantic import BaseModel
 
@@ -73,6 +76,8 @@ class TestRepairKeys(unittest.TestCase):
         self.assertEqual(result.data["age"], 30)
         self.assertEqual(result.data["email"], "john@example.com")
         self.assertEqual(len(result.errors), 3)
+        self.assertEqual(len(result.repaired_errors), 3)
+        self.assertEqual(len(result.unrepaired_errors), 0)
         self.assertGreater(result.error_ratio, 0)
 
     def test_nested_objects(self):
@@ -96,6 +101,8 @@ class TestRepairKeys(unittest.TestCase):
         self.assertEqual(result.data["address"]["city"], "NYC")
         self.assertEqual(result.data["address"]["state"], "NY")
         self.assertEqual(result.data["address"]["zip_code"], "10001")
+        self.assertTrue(all(e in result.repaired_errors for e in result.errors))
+        self.assertEqual(len(result.unrepaired_errors), 0)
 
     def test_list_of_objects(self):
         """Test lists of objects."""
@@ -126,6 +133,8 @@ class TestRepairKeys(unittest.TestCase):
         self.assertEqual(len(result.data["products"]), 2)
         self.assertEqual(result.data["products"][0]["name"], "Laptop")
         self.assertEqual(result.data["products"][1]["name"], "Mouse")
+        self.assertEqual(len(result.unrepaired_errors), 0)
+        self.assertGreater(len(result.repaired_errors), 0)
 
     def test_complex_nested_structure(self):
         """Test very complex nested structure with multiple levels."""
@@ -191,9 +200,8 @@ class TestRepairKeys(unittest.TestCase):
         # Verify shipping address
         self.assertEqual(result.data["shipping_address"]["street"], "123 Main Street")
         self.assertEqual(result.data["shipping_address"]["city"], "New York")
-
-        print(f"\n✅ Complex nested: {len(result.errors)} typos repaired")
-        print(f"   Total error result.error_ratio: {result.error_ratio:.2%}")
+        self.assertEqual(len(result.unrepaired_errors), 0)
+        self.assertEqual(len(result.repaired_errors), len(result.errors))
 
     def test_error_types(self):
         """Test different error types."""
@@ -211,10 +219,129 @@ class TestRepairKeys(unittest.TestCase):
 
         result = repair_keys(data, schema, max_error_ratio_per_key=0.5)
 
+        self.assertFalse(result.success)
         error_types = {e.error_type for e in result.errors}
         self.assertIn(ErrorType.misspelled_key, error_types)
         self.assertIn(ErrorType.unrecognized_key, error_types)
         self.assertIn(ErrorType.missing_expected_key, error_types)
+        self.assertEqual(len(result.repaired_errors), 1)
+        self.assertEqual(len(result.unrepaired_errors), 2)
+
+    def test_drop_unrepairable_keys(self):
+        """Test dropping of unrecognized keys that can't be matched."""
+
+        class User(BaseModel):
+            name: str
+            age: int
+
+        schema = User.model_json_schema()
+        data = {"name": "John", "age": 30, "unknown_field": "value", "another_bad_key": 123}
+
+        result = repair_keys(data, schema, drop_unrepairable_items=True)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data, {"name": "John", "age": 30})
+        self.assertNotIn("unknown_field", result.data)
+        self.assertNotIn("another_bad_key", result.data)
+        self.assertEqual(len(result.unrepaired_errors), 0)
+        # Both dropped keys should be recorded
+        self.assertEqual(len(result.repaired_errors), 2)
+        dropped_keys = {e.from_key for e in result.repaired_errors}
+        self.assertEqual(dropped_keys, {"unknown_field", "another_bad_key"})
+
+    def test_drop_unrepairable_keys_with_typos(self):
+        """Test that repairable typos are fixed and unrepairable keys are dropped."""
+
+        class User(BaseModel):
+            name: str
+            age: int
+            email: str
+
+        schema = User.model_json_schema()
+        data = {"nam": "John", "age": 30, "emal": "john@example.com", "completely_wrong": "value"}
+
+        result = repair_keys(data, schema, drop_unrepairable_items=True)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["name"], "John")
+        self.assertEqual(result.data["age"], 30)
+        self.assertEqual(result.data["email"], "john@example.com")
+        self.assertNotIn("completely_wrong", result.data)
+        # 3 repaired: nam->name, emal->email, completely_wrong dropped
+        self.assertEqual(len(result.repaired_errors), 3)
+        self.assertEqual(len(result.unrepaired_errors), 0)
+        # Verify dropped key is recorded
+        dropped = [
+            e for e in result.repaired_errors if e.message and "dropped" in e.message.lower()
+        ]
+        self.assertEqual(len(dropped), 1)
+        self.assertEqual(dropped[0].from_key, "completely_wrong")
+
+    def test_drop_unrepairable_optional_nested_object(self):
+        """Test dropping of optional nested objects that fail repair."""
+
+        class Profile(BaseModel):
+            nickname: str
+            bio: str
+
+        class User(BaseModel):
+            name: str
+            age: int
+            profile: Profile | None = None
+
+        schema = User.model_json_schema()
+        data = {"name": "John", "age": 30, "profile": {"unknown": "value", "bad": "data"}}
+
+        result = repair_keys(data, schema, drop_unrepairable_items=True)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["name"], "John")
+        self.assertEqual(result.data["age"], 30)
+        self.assertNotIn("profile", result.data)
+        self.assertEqual(len(result.unrepaired_errors), 0)
+        # Optional nested object drop is recorded in errors (from nested repair attempt)
+        self.assertGreater(len(result.errors), 0)
+
+    def test_cannot_drop_required_nested_object(self):
+        """Test that required nested objects that fail repair cause failure."""
+
+        class Profile(BaseModel):
+            nickname: str
+
+        class User(BaseModel):
+            name: str
+            profile: Profile  # Required
+
+        schema = User.model_json_schema()
+        data = {"name": "John", "profile": {"unknown": "value"}}
+
+        result = repair_keys(data, schema, drop_unrepairable_items=True)
+
+        self.assertFalse(result.success)
+        self.assertIsNone(result.data)
+        self.assertGreater(len(result.unrepaired_errors), 0)
+
+    def test_drop_optional_with_typo_in_key(self):
+        """Test dropping optional nested object when the key itself has a typo."""
+
+        class Profile(BaseModel):
+            nickname: str
+
+        class User(BaseModel):
+            name: str
+            profile: Profile | None = None
+
+        schema = User.model_json_schema()
+        data = {"name": "John", "profle": {"unknown": "value"}}  # Typo in 'profile'
+
+        result = repair_keys(data, schema, drop_unrepairable_items=True)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["name"], "John")
+        self.assertNotIn("profile", result.data)
+        self.assertEqual(len(result.unrepaired_errors), 0)
+        # Should have errors from key repair attempt and nested repair attempt
+        self.assertGreater(len(result.errors), 0)
 
 
 class TestFuzzyModelValidateJson(unittest.TestCase):
@@ -300,10 +427,9 @@ class TestFuzzyModelValidateJson(unittest.TestCase):
         self.assertEqual(len(order.products), 1)
         self.assertEqual(order.products[0].name, "Laptop")
 
-        print("\n✅ Complex validation successful!")
-
     def test_validation_failure(self):
         """Test that validation fails for too many result.errors."""
+        from fuzzy_json_repair import RepairFailedError
 
         class User(BaseModel):
             name: str
@@ -312,11 +438,19 @@ class TestFuzzyModelValidateJson(unittest.TestCase):
         # Completely wrong data
         json_str = '{"wrong": "data", "bad": "keys"}'
 
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaises(RepairFailedError) as cm:
             fuzzy_model_validate_json(json_str, User, max_total_error_ratio=0.3)
 
         # Should fail with validation error
         self.assertIn("failed", str(cm.exception).lower())
+
+        # Check structured access to error details
+        error = cm.exception
+        self.assertIsNotNone(error.result)
+        self.assertEqual(error.model_cls, User)
+        self.assertEqual(error.json_data, json_str)
+        self.assertGreater(len(error.errors), 0)
+        self.assertGreater(len(error.unrepaired_errors), 0)
 
 
 class TestRepairThresholds(unittest.TestCase):
@@ -338,6 +472,8 @@ class TestRepairThresholds(unittest.TestCase):
         # Should succeed with good typos
         self.assertTrue(result.success)
         self.assertEqual(len(result.errors), 3)
+        self.assertEqual(len(result.repaired_errors), 3)
+        self.assertEqual(len(result.unrepaired_errors), 0)
 
     def test_excessive_total_error_ratio(self):
         """Test that repairs with high average error return None."""
@@ -356,6 +492,8 @@ class TestRepairThresholds(unittest.TestCase):
         # Should fail due to high total error result.error_ratio (3 typos / 3 fields > 0.1)
         self.assertFalse(result.success)
         self.assertGreater(result.error_ratio, 0)
+        self.assertEqual(len(result.unrepaired_errors), 0)
+        self.assertEqual(len(result.repaired_errors), len(result.errors))
 
     def test_strict_mode_rejects_unrecognized(self):
         """Test strict mode returns None for unrecognized keys."""
@@ -373,6 +511,37 @@ class TestRepairThresholds(unittest.TestCase):
         self.assertFalse(result.success)
         has_unrecognized = any(e.error_type == ErrorType.unrecognized_key for e in result.errors)
         self.assertTrue(has_unrecognized)
+        self.assertGreater(len(result.unrepaired_errors), 0)
+        self.assertTrue(all(e in result.unrepaired_errors for e in result.unrecognized_keys))
+
+
+class TestOptionalPydantic(unittest.TestCase):
+    """Ensure Pydantic is only required for high-level API."""
+
+    def test_repair_keys_import_without_pydantic(self):
+        original_pydantic = sys.modules.pop("pydantic", None)
+        with mock.patch.dict(sys.modules, {"pydantic": None}):
+            import fuzzy_json_repair
+            import fuzzy_json_repair.repair as repair_module
+
+            importlib.reload(repair_module)
+            importlib.reload(fuzzy_json_repair)
+
+            result = repair_module.repair_keys({}, {"properties": {}})
+            self.assertTrue(result.success)
+            self.assertEqual(result.unrepaired_errors, [])
+
+            with self.assertRaises(ImportError):
+                repair_module.fuzzy_model_validate_json("{}", type("Dummy", (), {}))
+
+        if original_pydantic is not None:
+            sys.modules["pydantic"] = original_pydantic
+        import fuzzy_json_repair.repair as repair_module
+
+        importlib.reload(repair_module)
+        import fuzzy_json_repair  # noqa: F401
+
+        importlib.reload(fuzzy_json_repair)
 
 
 if __name__ == "__main__":
