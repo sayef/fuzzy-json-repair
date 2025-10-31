@@ -21,7 +21,7 @@ Uses:
 
 from typing import Any
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 # Main API - clean and simple
 from .repair import ErrorType, RepairError, RepairFailedError, RepairResult, repair_keys
