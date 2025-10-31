@@ -26,9 +26,9 @@ __version__ = "0.1.4"
 # Main API - clean and simple
 from .repair import ErrorType, RepairError, RepairFailedError, RepairResult, repair_keys
 
+# Build __all__ dynamically based on optional dependencies
 __all__ = [
     "repair_keys",
-    "fuzzy_model_validate_json",
     "RepairError",
     "RepairResult",
     "RepairFailedError",
@@ -36,9 +36,27 @@ __all__ = [
     "__version__",
 ]
 
+# Add Pydantic-dependent functions only if Pydantic is available
+try:
+    import pydantic  # noqa: F401
 
-def __getattr__(name: str) -> Any:  # pragma: no cover - thin wrapper
+    __all__.append("fuzzy_model_validate_json")
+except ImportError:
+    pass
+
+
+def __getattr__(name: str) -> Any:
     if name == "fuzzy_model_validate_json":
+        # Check for Pydantic availability at import time
+        try:
+            import pydantic  # noqa: F401
+        except ImportError as exc:
+            msg = (
+                "fuzzy_model_validate_json requires Pydantic. "
+                "Install it with: pip install fuzzy-json-repair[pydantic]"
+            )
+            raise ImportError(msg) from exc
+
         from .repair import fuzzy_model_validate_json
 
         return fuzzy_model_validate_json
